@@ -17,6 +17,7 @@ import type { SpecPoint } from '@prisma/client'
 
 export interface GeneratedQuestion {
   question:     string
+  answer:       string     // machine-readable expected answer for grading
   specPointId:  string
   difficulty:   number
   marks:        number
@@ -43,7 +44,7 @@ function pick(seed: number, offset: number, min: number, max: number): number {
 
 // ─── Templates ───────────────────────────────────────────
 
-type Template = (seed: number) => Omit<GeneratedQuestion, 'specPointId' | 'difficulty'>
+type Template = (seed: number) => Omit<GeneratedQuestion, 'specPointId' | 'difficulty' | 'answer'>
 
 interface TopicTemplates {
   low:    Template[]   // difficulty 1–4
@@ -400,7 +401,15 @@ export function generateQuestion(sp: SpecPoint): GeneratedQuestion {
   const template = pool[seed % pool.length]
   const generated = template(seed)
 
-  return { ...generated, specPointId: sp.id, difficulty }
+  return { ...generated, answer: extractAnswer(generated.solution), specPointId: sp.id, difficulty }
+}
+
+/** Extract a machine-readable answer from the last '= ...' in the solution string. */
+function extractAnswer(solution: string): string {
+  const lines = solution.split('\n').filter(l => l.trim())
+  const last  = lines[lines.length - 1] ?? ''
+  const match = last.match(/=\s*(.+)$/)
+  return match ? match[1].trim() : last.trim()
 }
 
 // ─── Math helpers ─────────────────────────────────────────
