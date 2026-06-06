@@ -34,4 +34,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-math-ascension.db
+data/math-ascension.db
+data/math-ascension.db-journal
+*.db-journal
