@@ -7,7 +7,7 @@
  */
 
 import { prisma }                          from '../db'
-import { buildGraphSnapshot, buildProgressMap } from '../graph'
+import { buildGraphSnapshot, buildProgressMap, isUnlocked } from '../graph'
 import { EXPECTED_TOTAL }                  from './validation'
 import type { SpecPoint }                  from '@prisma/client'
 
@@ -67,7 +67,7 @@ export async function getCurriculumGraphState(): Promise<CurriculumGraphState> {
     topicCoverage[sp.topic] = (topicCoverage[sp.topic] ?? 0) + 1
   }
 
-  const masteries      = Array.from(progressMap.values())
+  const masteries      = specPoints.map(sp => progressMap.get(sp.id) ?? 0)
   const masteredCount  = masteries.filter(m => m >= 800).length
   const averageMastery = masteries.length > 0
     ? Math.round(masteries.reduce((s, m) => s + m, 0) / masteries.length)
@@ -92,18 +92,9 @@ export async function getSpecPointsWithMastery(): Promise<SpecPointWithMastery[]
     buildProgressMap(),
   ])
 
-  // Build prereq mastery checker
-  async function checkUnlocked(sp: SpecPoint): Promise<boolean> {
-    const { parsePrerequisites } = await import('../graph')
-    const prereqs = parsePrerequisites(sp)
-    return prereqs.every(pid => (progressMap.get(pid) ?? 0) >= 500)
-  }
-
-  return Promise.all(
-    sps.map(async sp => ({
-      ...sp,
-      mastery:  progressMap.get(sp.id) ?? 0,
-      unlocked: await checkUnlocked(sp),
-    })),
-  )
+  return sps.map(sp => ({
+    ...sp,
+    mastery:  progressMap.get(sp.id) ?? 0,
+    unlocked: isUnlocked(sp, progressMap),
+  }))
 }

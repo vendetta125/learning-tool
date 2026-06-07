@@ -92,11 +92,13 @@ const TEMPLATES: Record<string, TopicTemplates> = {
       },
       s => {
         const a = pick(s, 0, 2, 7), n = pick(s, 1, -4, 4)
+        const value = a * Math.pow(10, n)
+        const ordinary = n < 0 ? value.toFixed(-n) : String(value)
         return {
-          question:     `Write ${a} × 10^${n} as an ordinary number${n < 0 ? '.' : '.'}\n[1 mark]`,
+          question:     `Write ${a} × 10^${n} as an ordinary number.\n[1 mark]`,
           marks:        1,
           questionType: 'calculate',
-          solution:     `${a} × 10^${n} = ${(a * Math.pow(10, n)).toExponential()}`,
+          solution:     `${a} × 10^${n} = ${ordinary}`,
           hints:        [`10^${n} = ${Math.pow(10, n)}`, 'Multiply by the power of 10'],
         }
       },
@@ -406,10 +408,15 @@ export function generateQuestion(sp: SpecPoint): GeneratedQuestion {
 
 /** Extract a machine-readable answer from the last '= ...' in the solution string. */
 function extractAnswer(solution: string): string {
-  const lines = solution.split('\n').filter(l => l.trim())
-  const last  = lines[lines.length - 1] ?? ''
-  const match = last.match(/=\s*(.+)$/)
-  return match ? match[1].trim() : last.trim()
+  const lines = solution.split('\n').map(l => l.trim()).filter(Boolean)
+  // Walk backwards so multi-part / "show working" solutions resolve to their
+  // final line, and within that line anchor on the LAST '=' so trailing
+  // working (e.g. "Area = ½ × 5 × 3 = 7.5 cm²") yields just the final value.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const match = lines[i].match(/=\s*([^=]+)$/)
+    if (match) return match[1].trim()
+  }
+  return lines[lines.length - 1] ?? ''
 }
 
 // ─── Math helpers ─────────────────────────────────────────

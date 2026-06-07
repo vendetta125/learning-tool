@@ -174,15 +174,16 @@ export async function getNextTopic(): Promise<NextTopic | null> {
 // ─── Learning state ───────────────────────────────────────
 
 export async function computeLearningState(): Promise<LearningState> {
-  const [specPoints, allProgress] = await Promise.all([
+  const [specPoints, allProgress, progressMap] = await Promise.all([
     prisma.specPoint.findMany(),
     prisma.userProgress.findMany(),
+    buildProgressMap(),
   ])
 
-  const progressMap = new Map(allProgress.map(p => [p.specPointId, p]))
+  const progressBySpecPoint = new Map(allProgress.map(p => [p.specPointId, p]))
 
   const toSummary = (sp: SpecPoint): SpecPointSummary => {
-    const p = progressMap.get(sp.id)
+    const p = progressBySpecPoint.get(sp.id)
     const days = p?.lastReviewed
       ? (Date.now() - p.lastReviewed.getTime()) / 86_400_000
       : null
@@ -190,37 +191,33 @@ export async function computeLearningState(): Promise<LearningState> {
       id:              sp.id,
       title:           sp.title,
       topic:           sp.topic,
-      mastery:         p?.mastery ?? 0,
+      mastery:         progressMap.get(sp.id) ?? 0,
       daysSinceReview: days !== null ? Math.round(days * 10) / 10 : null,
     }
   }
 
   // Weak: mastery < 500 and at least 1 attempt
   const weakTopics = specPoints
-    .filter(sp => {
-      const p = progressMap.get(sp.id)
-      return p && p.mastery < 500
-    })
+    .filter(sp => progressBySpecPoint.has(sp.id) && (progressMap.get(sp.id) ?? 0) < 500)
     .map(toSummary)
 
   // Ready: unlocked (prereqs ≥ 500) and mastery < mastered threshold
-  const masterMap = new Map(allProgress.map(p => [p.specPointId, p.mastery]))
   const readyTopics = specPoints
     .filter(sp => {
-      const mastery = masterMap.get(sp.id) ?? 0
+      const mastery = progressMap.get(sp.id) ?? 0
       if (mastery >= MASTERED_THRESHOLD) return false
       const prereqs = parsePrerequisites(sp)
-      return prereqs.every(id => (masterMap.get(id) ?? 0) >= PREREQUISITE_MASTERY_THRESHOLD)
+      return prereqs.every(id => (progressMap.get(id) ?? 0) >= PREREQUISITE_MASTERY_THRESHOLD)
     })
     .map(toSummary)
 
   // Forgotten: mastery has decayed significantly (lastReviewed exists but mastery < 300)
   const forgottenTopics = specPoints
     .filter(sp => {
-      const p = progressMap.get(sp.id)
+      const p = progressBySpecPoint.get(sp.id)
       if (!p || !p.lastReviewed) return false
       const days = (Date.now() - p.lastReviewed.getTime()) / 86_400_000
-      return days > 7 && p.mastery < 300
+      return days > 7 && (progressMap.get(sp.id) ?? 0) < 300
     })
     .map(toSummary)
 
@@ -229,11 +226,11 @@ export async function computeLearningState(): Promise<LearningState> {
     .filter(sp => {
       const prereqs = parsePrerequisites(sp)
       if (prereqs.length === 0) return false
-      return prereqs.some(id => (masterMap.get(id) ?? 0) < PREREQUISITE_MASTERY_THRESHOLD)
+      return prereqs.some(id => (progressMap.get(id) ?? 0) < PREREQUISITE_MASTERY_THRESHOLD)
     })
     .map(toSummary)
 
-  const allMastery   = allProgress.map(p => p.mastery)
+  const allMastery     = specPoints.map(sp => progressMap.get(sp.id) ?? 0)
   const averageMastery = allMastery.length
     ? allMastery.reduce((a, b) => a + b, 0) / allMastery.length
     : 0
@@ -244,7 +241,7 @@ export async function computeLearningState(): Promise<LearningState> {
     forgottenTopics,
     blockedTopics,
     totalSpecPoints: specPoints.length,
-    masteredCount:   allProgress.filter(p => p.mastery >= MASTERED_THRESHOLD).length,
+    masteredCount:   allMastery.filter(m => m >= MASTERED_THRESHOLD).length,
     averageMastery:  Math.round(averageMastery),
   }
 }

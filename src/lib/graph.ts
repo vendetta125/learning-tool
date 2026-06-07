@@ -7,6 +7,7 @@
  */
 
 import { prisma } from './db'
+import { applyDecay } from './learningEngine'
 import type { SpecPoint } from '@prisma/client'
 
 export const PREREQUISITE_MASTERY_THRESHOLD = 500
@@ -81,8 +82,16 @@ export async function buildGraphSnapshot(progressMap: Map<string, number>) {
   return { nodes, edges }
 }
 
-/** Load all current mastery scores into a Map for fast lookup. */
+/**
+ * Load current mastery scores into a Map for fast lookup.
+ * Applies the forgetting-curve decay relative to each spec point's
+ * lastReviewed timestamp, so stale topics read as less mastered than
+ * their last-recorded (decay-free, "as of that review") snapshot.
+ */
 export async function buildProgressMap(): Promise<Map<string, number>> {
   const rows = await prisma.userProgress.findMany()
-  return new Map(rows.map(r => [r.specPointId, r.mastery]))
+  return new Map(rows.map(r => [
+    r.specPointId,
+    Math.round(applyDecay(r.mastery, r.lastReviewed, r.decayRate)),
+  ]))
 }

@@ -10,65 +10,69 @@ interface SpecPoint {
   difficulty: number; description: string
 }
 interface GeneratedQuestion {
-  question: string; marks: number; difficulty: number
-  hint?: string; solution: string; answer: string
+  question: string; answer: string; marks: number
+  solution: string; hints: string[]
+}
+interface AlternativeExplanation {
+  mode: 'procedural' | 'conceptual' | 'visual' | 'analogy'
+  content: string
+}
+interface TutorResponse {
+  diagnosis: string
+  misconception: string | null
+  explanation: string
+  alternativeExplanations: AlternativeExplanation[]
+  nextQuestion: GeneratedQuestion
+  specPointLinks: string[]
 }
 interface TutorResult {
-  masteryUpdate: { newMastery: number; change: number }
-  tutorResponse: {
-    specPointTitle: string
-    explanation: Record<string, unknown>
-    confidence: number
-    misconceptionDiagnosis: { type: string }
-    followUpQuestion: GeneratedQuestion
-  }
-  nextTopic: SpecPoint | null
+  masteryUpdate: { newMastery: number; newConfidence: number; attemptCount: number; correct: boolean }
+  tutorResponse: TutorResponse
+  nextTopic: { specPointId: string; title: string; topic: string; reason: string; mastery: number } | null
   learningState: { averageMastery: number; masteredCount: number }
 }
 
-// ─── Explanation renderer ──────────────────────────────────
+// ─── Lightweight markdown-ish text renderer (the explanation ─
+// ─── strings use **bold** / *italic* and \n\n paragraphs)   ──
 
-function ExplanationBlock({ exp }: { exp: Record<string, unknown> }) {
-  const type = exp.type as string
-  if (type === 'procedural') {
-    const steps = exp.steps as string[] | undefined
-    return (
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wider text-indigo-400">Step-by-step</div>
-        {steps?.map((s, i) => (
-          <div key={i} className="flex gap-3">
-            <span className="shrink-0 font-mono text-xs text-indigo-400 mt-0.5">{i + 1}.</span>
-            <span className="text-sm text-gray-300">{s}</span>
-          </div>
-        ))}
-      </div>
-    )
-  }
-  if (type === 'analogy') {
-    return (
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wider text-purple-400">Analogy</div>
-        <div className="text-sm text-gray-300 italic">&ldquo;{exp.analogy as string}&rdquo;</div>
-        {exp.mapping != null && <div className="text-sm text-gray-400">{String(exp.mapping)}</div>}
-      </div>
-    )
-  }
-  if (type === 'visual') {
-    return (
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wider text-teal-400">Visual</div>
-        <pre className="whitespace-pre text-xs text-gray-300 font-mono bg-gray-950 rounded p-3 overflow-auto">
-          {exp.diagram as string}
-        </pre>
-      </div>
-    )
-  }
-  // conceptual / fallback
+const MODE_LABELS: Record<AlternativeExplanation['mode'], string> = {
+  procedural: 'Step-by-step',
+  conceptual: 'Concept',
+  visual:     'Visual',
+  analogy:    'Analogy',
+}
+
+function renderInline(text: string) {
+  return text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean).map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('*') && part.endsWith('*'))   return <em key={i}>{part.slice(1, -1)}</em>
+    return <span key={i}>{part}</span>
+  })
+}
+
+function ExplanationText({ text }: { text: string }) {
   return (
-    <div className="space-y-2">
-      <div className="text-xs font-semibold uppercase tracking-wider text-yellow-400">Concept</div>
-      <div className="text-sm text-gray-300">{(exp.coreIdea ?? exp.idea ?? '') as string}</div>
-      {exp.why != null && <div className="text-sm text-gray-400">{String(exp.why)}</div>}
+    <div className="space-y-2 text-sm leading-relaxed text-gray-300">
+      {text.split(/\n\n+/).map((para, i) => <p key={i}>{renderInline(para)}</p>)}
+    </div>
+  )
+}
+
+function ExplanationBlock({ tutorResponse }: { tutorResponse: TutorResponse }) {
+  return (
+    <div className="space-y-4">
+      <ExplanationText text={tutorResponse.explanation} />
+      {tutorResponse.alternativeExplanations.length > 0 && (
+        <div className="space-y-2 border-t border-gray-800 pt-3">
+          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Other ways to see it</div>
+          {tutorResponse.alternativeExplanations.map(alt => (
+            <details key={alt.mode} className="text-sm">
+              <summary className="cursor-pointer text-indigo-400 hover:text-indigo-300">{MODE_LABELS[alt.mode]}</summary>
+              <div className="mt-2"><ExplanationText text={alt.content} /></div>
+            </details>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -97,7 +101,7 @@ function StudySession() {
       if (!specPointId) {
         const res  = await fetch('/api/test-learning')
         const data = await res.json()
-        specPointId = data.nextTopic?.id
+        specPointId = data.nextTopic?.specPointId
         if (!specPointId) { setErrMsg('No topics available — initialise the curriculum first.'); setPhase('error'); return }
       }
 
@@ -115,15 +119,17 @@ function StudySession() {
     }
   }
 
-  async function submitAnswer() {
+  async function submitAnswer(rawAnswer: string) {
     if (!specPoint || !question) return
-    const timeTakenMs = Date.now() - startTimeRef.current
+    const userAnswer   = rawAnswer.trim()
+    const responseTime = Date.now() - startTimeRef.current
+    const correct      = userAnswer.length > 0 && userAnswer.toLowerCase() === question.answer.trim().toLowerCase()
 
     try {
       const res = await fetch('/api/tutor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specPointId: specPoint.id, answer, timeTakenMs }),
+        body: JSON.stringify({ specPointId: specPoint.id, correct, responseTime, userAnswer }),
       })
       if (!res.ok) { const d = await res.json(); throw new Error(d.error ?? 'Submit failed') }
       const data = await res.json() as TutorResult
@@ -137,7 +143,7 @@ function StudySession() {
 
   useEffect(() => { loadQuestion(initialSPId) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isCorrect = result && answer.trim().toLowerCase() === question?.answer.toLowerCase()
+  const isCorrect = result?.masteryUpdate.correct ?? false
 
   if (phase === 'loading') {
     return (
@@ -168,12 +174,7 @@ function StudySession() {
           {result && (
             <div className="ml-auto text-right">
               <div className="text-xs text-gray-500">Mastery</div>
-              <div className="font-mono font-bold">
-                {result.masteryUpdate.newMastery}
-                <span className={`ml-1 text-xs ${result.masteryUpdate.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {result.masteryUpdate.change >= 0 ? '+' : ''}{result.masteryUpdate.change}
-                </span>
-              </div>
+              <div className="font-mono font-bold">{result.masteryUpdate.newMastery}</div>
             </div>
           )}
         </div>
@@ -189,10 +190,14 @@ function StudySession() {
             </span>
           </div>
 
-          {question.hint && phase === 'question' && (
+          {question.hints.length > 0 && phase === 'question' && (
             <details className="text-sm">
-              <summary className="cursor-pointer text-indigo-400 hover:text-indigo-300">Hint</summary>
-              <p className="mt-2 text-gray-400">{question.hint}</p>
+              <summary className="cursor-pointer text-indigo-400 hover:text-indigo-300">
+                Hint{question.hints.length > 1 ? 's' : ''}
+              </summary>
+              <ul className="mt-2 space-y-1 text-gray-400 list-disc list-inside">
+                {question.hints.map((h, i) => <li key={i}>{h}</li>)}
+              </ul>
             </details>
           )}
 
@@ -202,21 +207,21 @@ function StudySession() {
                 type="text"
                 value={answer}
                 onChange={e => setAnswer(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && answer.trim() && submitAnswer()}
+                onKeyDown={e => e.key === 'Enter' && answer.trim() && submitAnswer(answer)}
                 placeholder="Your answer…"
                 className="w-full rounded-lg border border-gray-700 bg-gray-950 px-4 py-2.5 text-sm focus:border-indigo-500 focus:outline-none"
                 autoFocus
               />
               <div className="flex gap-2">
                 <button
-                  onClick={submitAnswer}
+                  onClick={() => submitAnswer(answer)}
                   disabled={!answer.trim()}
                   className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40 transition-colors"
                 >
                   Submit
                 </button>
                 <button
-                  onClick={() => { setAnswer(''); submitAnswer() }}
+                  onClick={() => submitAnswer('')}
                   className="rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-400 hover:bg-gray-800 transition-colors"
                 >
                   Skip
@@ -235,7 +240,7 @@ function StudySession() {
 
               {/* Explanation */}
               <div className="rounded-lg bg-gray-950 p-4">
-                <ExplanationBlock exp={result.tutorResponse.explanation} />
+                <ExplanationBlock tutorResponse={result.tutorResponse} />
               </div>
 
               {/* Solution */}
@@ -246,17 +251,18 @@ function StudySession() {
                 </pre>
               </details>
 
-              {/* Misconception */}
-              {result.tutorResponse.misconceptionDiagnosis.type !== 'none' && (
+              {/* Misconception — only meaningful when the attempt was wrong */}
+              {!isCorrect && result.tutorResponse.misconception && (
                 <div className="text-sm text-orange-300 bg-orange-950/30 rounded p-3">
-                  Diagnosis: <strong>{result.tutorResponse.misconceptionDiagnosis.type}</strong>
+                  <span className="font-semibold">{result.tutorResponse.misconception}:</span>{' '}
+                  {result.tutorResponse.diagnosis}
                 </div>
               )}
 
               {/* Next actions */}
               <div className="flex gap-2 pt-1">
                 <button
-                  onClick={() => loadQuestion(result.nextTopic?.id)}
+                  onClick={() => loadQuestion(result.nextTopic?.specPointId)}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold hover:bg-indigo-500 transition-colors"
                 >
                   Next question

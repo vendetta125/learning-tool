@@ -8,7 +8,7 @@ type ExamType = 'MINI' | 'FULL' | 'BOSS_BATTLE'
 
 interface GeneratedQuestion {
   question: string; marks: number; difficulty: number
-  hint?: string; solution: string; answer: string
+  hints: string[]; solution: string; answer: string
 }
 interface ExamQuestion {
   id: string; generated: GeneratedQuestion
@@ -264,18 +264,18 @@ function ActiveExam({
           </span>
         </div>
 
-        {q.generated.hint && (
+        {q.generated.hints.length > 0 && (
           <button
             onClick={() => setShowHint(h => !h)}
             className="text-sm text-indigo-400 hover:text-indigo-300 transition-colors"
           >
-            {showHint ? 'Hide hint' : 'Show hint'}
+            {showHint ? 'Hide hint' : 'Show hint'}{q.generated.hints.length > 1 ? 's' : ''}
           </button>
         )}
-        {showHint && q.generated.hint && (
-          <div className="rounded-lg bg-indigo-950/40 px-4 py-3 text-sm text-gray-300">
-            {q.generated.hint}
-          </div>
+        {showHint && q.generated.hints.length > 0 && (
+          <ul className="rounded-lg bg-indigo-950/40 px-4 py-3 text-sm text-gray-300 space-y-1 list-disc list-inside">
+            {q.generated.hints.map((h, i) => <li key={i}>{h}</li>)}
+          </ul>
         )}
 
         <div className="space-y-3 pt-1">

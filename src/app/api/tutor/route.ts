@@ -69,7 +69,7 @@ export async function GET(req: NextRequest) {
     const sp = await prisma.specPoint.findUniqueOrThrow({ where: { id: specPointId } })
     const question = generateQuestion(sp)
 
-    return NextResponse.json({ question })
+    return NextResponse.json({ specPoint: sp, question })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     const status  = message.includes('No SpecPoint') ? 404 : 500
